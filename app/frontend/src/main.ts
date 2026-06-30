@@ -88,6 +88,7 @@ async function checkMDNS(): Promise<void> {
   setDot(mdnsDot, d.ok);
   mdnsMsg.textContent = d.message;
   mdnsHow.textContent = d.ok ? "Devices reach the clinic at http://care.local." : d.how;
+  mdnsHow.classList.toggle("howbox", !d.ok);
   gate();
 }
 
@@ -117,13 +118,26 @@ $("#choose-backup").addEventListener("click", () => {
 
 install.addEventListener("click", () => {
   if (install.disabled) return;
-  install.disabled = true;
-  $("#wizard-console").hidden = false;
-  append("Starting one-time setup… (clones + builds the images; several minutes)");
-  phase = "setup";
-  void App.RunSetup("care.local", $<HTMLInputElement>("#adminpw").value, installDir, backupDir).catch(
-    (e) => append(`error: ${String(e)}`),
-  );
+  void (async () => {
+    // Re-verify everything at the moment of install — the green dots could be
+    // stale (Docker stopped, name changed) since the user last clicked Check.
+    install.disabled = true;
+    $("#install-note").textContent = "Re-checking requirements…";
+    await Promise.all([checkDocker(), checkGit(), checkMDNS()]);
+    if (!(dockerOk && gitOk && mdnsOk)) {
+      // gate() already re-disabled Install; point at what regressed.
+      $("#install-note").textContent = "A requirement is no longer met — fix the red step above and try again.";
+      return;
+    }
+
+    install.disabled = true;
+    $("#wizard-console").hidden = false;
+    append("Starting one-time setup… (clones + builds the images; several minutes)");
+    phase = "setup";
+    void App.RunSetup("care.local", $<HTMLInputElement>("#adminpw").value, installDir, backupDir).catch(
+      (e) => append(`error: ${String(e)}`),
+    );
+  })();
 });
 
 // ===========================================================================

@@ -103,7 +103,11 @@ func (e *Engine) MDNSCheck() NameStatus {
 		}
 		return NameStatus{OK: false,
 			Message: full + " doesn't resolve yet",
-			How:     "Rename this PC to '" + name + "' (Settings → System → About → Rename), set the WiFi/Ethernet to a Private network, and allow UDP 5353 in Windows Firewall. Recent Windows 11 then advertises care.local on its own. If it still doesn't resolve, install Apple Bonjour. Then re-check."}
+			How: "Open PowerShell as Administrator and run these (the last one reboots):\n" +
+				"  Set-NetConnectionProfile -NetworkCategory Private\n" +
+				"  New-NetFirewallRule -DisplayName \"mDNS\" -Direction Inbound -Protocol UDP -LocalPort 5353 -Action Allow -Profile Private\n" +
+				"  Rename-Computer -NewName \"" + name + "\" -Force -Restart\n" +
+				"After the reboot, click Check. Still failing? Install Apple Bonjour, or use a static IP. (See docs/install-windows.md.)"}
 	}
 	return NameStatus{OK: false, Message: "unsupported OS"}
 }

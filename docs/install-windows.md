@@ -26,16 +26,46 @@ clinic. Other devices install nothing; they open `http://care.local`.
 
 Devices reach the clinic at `http://care.local`. **Windows can *resolve* `.local`
 names natively, and recent Windows 11 builds also *advertise* their own name** — so
-this often works with **no extra software**. The installer's **step-3 Check** tells
-you for sure (it tests whether `care.local` actually resolves).
+this often works with **no extra software** once the three settings below are right.
+The installer's **step-3 Check** tests whether `care.local` actually resolves, so you
+never have to guess.
 
-### Try native first (no install)
-1. **Rename the PC to `care`:** Settings → System → About → **Rename this PC** → `care` → restart.
-2. **Set the network to Private:** Settings → Network & Internet → your Wi-Fi/Ethernet → set **Network profile** to **Private**. *(Windows blocks multicast/mDNS on Public networks.)*
-3. **Allow mDNS through the firewall:** ensure **UDP port 5353** is allowed (inbound + outbound) in Windows Defender Firewall. *(Usually already allowed; create a rule if devices can't see the PC.)*
-4. In the installer, click **Check** on step 3. Green → you're done, no Bonjour needed.
+**Why these settings?** Windows blocks device-discovery (mDNS) by default in two
+places: on **Public** networks, and at the **firewall**. You're unblocking both, then
+naming the PC `care` so the name it advertises is `care.local`.
 
-### If step 3 still won't go green — pick one:
+> **Fastest path:** open **PowerShell as Administrator** (right-click Start →
+> **Terminal (Admin)**) and run these three — the last one reboots:
+> ```powershell
+> Set-NetConnectionProfile -NetworkCategory Private
+> New-NetFirewallRule -DisplayName "mDNS (care.local)" -Direction Inbound -Protocol UDP -LocalPort 5353 -Action Allow -Profile Private
+> Rename-Computer -NewName "care" -Force -Restart
+> ```
+> After the reboot, run `ping care.local` to confirm, then click **Check** in the app.
+
+If you prefer clicking through the menus, do the same three steps below.
+
+### Step 1 — Name the PC `care`
+- **Settings** (Win + I) → **System** → **About** → **Rename this PC** → type `care` → **Next** → **Restart now**.
+- PowerShell: `Rename-Computer -NewName "care" -Force -Restart`
+
+### Step 2 — Set the network to Private
+- **Settings** → **Network & Internet** → click your **Wi-Fi**/**Ethernet** → click the **network name** → under **Network profile type**, choose **Private**.
+- PowerShell: `Set-NetConnectionProfile -NetworkCategory Private`
+- *Why:* Windows hides the PC and blocks mDNS on Public networks; Private allows discovery.
+
+### Step 3 — Allow mDNS (UDP 5353) in the firewall
+Usually already allowed once the network is Private — add this only if devices still can't find the PC.
+- **Windows Defender Firewall with Advanced Security** → **Inbound Rules** → **New Rule…** → **Port** → **UDP**, port `5353` → **Allow the connection** → tick **Private** → name it `mDNS (care.local)` → **Finish**.
+- PowerShell: `New-NetFirewallRule -DisplayName "mDNS (care.local)" -Direction Inbound -Protocol UDP -LocalPort 5353 -Action Allow -Profile Private`
+- *Why:* mDNS announcements travel on UDP port 5353; the firewall must let them through.
+
+### Step 4 — Verify
+- On the server: `ping care.local` → replies with an IP = ✅.
+- In the CARE Clinic app: click **Check** on step 3 → it turns green.
+- From a phone on the same WiFi: open `http://care.local/` → the login page loads.
+
+### If step 4 still fails — pick one:
 
 **Option A — Apple Bonjour** (reliable `care.local` on any Windows version):
 - Install [Bonjour Print Services](https://support.apple.com/kb/DL999), keep the PC named `care`, re-check.

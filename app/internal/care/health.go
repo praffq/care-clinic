@@ -103,7 +103,7 @@ func (e *Engine) MDNSCheck() NameStatus {
 		}
 		return NameStatus{OK: false,
 			Message: full + " doesn't resolve yet",
-			How:     "Install Apple Bonjour (Bonjour Print Services) and set this PC's name to '" + name + "'. Then re-check."}
+			How:     "Rename this PC to '" + name + "' (Settings → System → About → Rename), set the WiFi/Ethernet to a Private network, and allow UDP 5353 in Windows Firewall. Recent Windows 11 then advertises care.local on its own. If it still doesn't resolve, install Apple Bonjour. Then re-check."}
 	}
 	return NameStatus{OK: false, Message: "unsupported OS"}
 }

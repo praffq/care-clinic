@@ -20,7 +20,10 @@ type App struct {
 	kit fs.FS // embedded deployment kit
 }
 
-func NewApp(kit fs.FS) *App { return &App{kit: kit} }
+func NewApp(kit fs.FS) *App {
+	care.FixPath() // make docker/git findable when launched from Finder/Explorer
+	return &App{kit: kit}
+}
 
 func (a *App) startup(ctx context.Context) { a.ctx = ctx }
 

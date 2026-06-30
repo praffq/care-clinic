@@ -5,6 +5,7 @@ package care
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Engine runs CARE actions against a kit directory (the folder holding
@@ -118,6 +120,49 @@ func augmentedPath() string {
 		parts = append(parts, existing)
 	}
 	return strings.Join(parts, sep)
+}
+
+// FixPath augments the *process* PATH so binary lookups succeed. exec.Command
+// resolves a program against the process PATH (os.Getenv), not a command's Env —
+// so a GUI-launched macOS app (minimal launchd PATH: /usr/bin:/bin:/usr/sbin:/sbin)
+// can't find docker/git until we widen it. Call once at startup.
+//
+// Order of preference, most authoritative first:
+//  1. the user's login-shell PATH (unix) — reflects wherever docker was actually
+//     installed, since installers update the shell PATH (homebrew, colima, ~/.docker/bin…);
+//  2. the current process PATH (on Windows this already has everything);
+//  3. a few common dirs as a last-resort fallback.
+func FixPath() {
+	var parts []string
+	if sp := loginShellPath(); sp != "" {
+		parts = append(parts, sp)
+	}
+	parts = append(parts, augmentedPath()) // current PATH + common fallback dirs
+	sep := ":"
+	if runtime.GOOS == "windows" {
+		sep = ";"
+	}
+	_ = os.Setenv("PATH", strings.Join(parts, sep))
+}
+
+// loginShellPath asks the user's login shell for its PATH — the same PATH the
+// terminal sees, where docker/git are known to work. Unix only; bounded by a
+// timeout so a slow/broken shell profile can't hang startup.
+func loginShellPath() string {
+	if runtime.GOOS == "windows" {
+		return ""
+	}
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/zsh"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, shell, "-lc", "echo $PATH").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // baseEnv is the environment every docker/git call gets: the inherited env, an

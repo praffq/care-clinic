@@ -22,6 +22,7 @@ func main() {
 	if kit == "" {
 		kit, _ = os.Getwd()
 	}
+	care.FixPath()
 	e := &care.Engine{
 		Kit: kit,
 		Log: func(s string) { fmt.Println(s) },

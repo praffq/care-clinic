@@ -15,7 +15,7 @@ clinic. Other devices install nothing; they open `http://care.local`.
 | **Windows 10/11** (64-bit) | the server OS | — |
 | **Docker Desktop**, running (WSL 2 backend) | runs the whole stack | [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/) → install → enable WSL 2 if prompted → open it |
 | **Git for Windows** | downloads + builds CARE once | [git-scm.com/download/win](https://git-scm.com/download/win) → install with defaults |
-| **Apple Bonjour** *or* a static IP | makes `care.local` resolvable (see step 2) | [Bonjour Print Services](https://support.apple.com/kb/DL999) |
+| Working **mDNS** for `care.local` | so devices find the server by name (see step 2) | native on recent Windows 11; otherwise [Apple Bonjour](https://support.apple.com/kb/DL999) or a static IP |
 
 > **Hardware:** 8 GB RAM minimum (16 GB recommended), ~10 GB free disk. Docker
 > Desktop on Windows needs virtualization enabled in the BIOS (usually on by default).
@@ -24,24 +24,30 @@ clinic. Other devices install nothing; they open `http://care.local`.
 
 ## 2. Make `care.local` resolvable
 
-**Windows cannot advertise its own `.local` name** the way macOS/Linux do, so pick one:
+Devices reach the clinic at `http://care.local`. **Windows can *resolve* `.local`
+names natively, and recent Windows 11 builds also *advertise* their own name** — so
+this often works with **no extra software**. The installer's **step-3 Check** tells
+you for sure (it tests whether `care.local` actually resolves).
 
-### Option A — Apple Bonjour (gives you `http://care.local`)
-1. Install **Bonjour Print Services** (link above).
-2. Rename the PC to `care`: **Settings → System → About → Rename this PC** → `care` → restart.
-3. After restart, devices on the WiFi can reach `http://care.local`.
+### Try native first (no install)
+1. **Rename the PC to `care`:** Settings → System → About → **Rename this PC** → `care` → restart.
+2. **Set the network to Private:** Settings → Network & Internet → your Wi-Fi/Ethernet → set **Network profile** to **Private**. *(Windows blocks multicast/mDNS on Public networks.)*
+3. **Allow mDNS through the firewall:** ensure **UDP port 5353** is allowed (inbound + outbound) in Windows Defender Firewall. *(Usually already allowed; create a rule if devices can't see the PC.)*
+4. In the installer, click **Check** on step 3. Green → you're done, no Bonjour needed.
 
-### Option B — Static IP (no extra software)
-1. Give the PC a fixed IP (router DHCP reservation, or Windows network settings), e.g. `192.168.1.50`.
-2. Staff open `http://192.168.1.50/` instead of `http://care.local`.
-3. **Also** set, in `backend.env`:
-   `BUCKET_EXTERNAL_ENDPOINT=http://192.168.1.50:9100`
-   and in `frontend.env`: `REACT_CARE_API_URL=http://192.168.1.50` (then `care rebuild-frontend`).
+### If step 3 still won't go green — pick one:
 
-> The installer's **step 3 check** passes when `care.local` resolves. If you chose a
-> static IP, that check won't go green — use the CLI path, or install Bonjour to use
-> the wizard. The frontend is built for `care.local` by default, so **Option A is the
-> smoother path**.
+**Option A — Apple Bonjour** (reliable `care.local` on any Windows version):
+- Install [Bonjour Print Services](https://support.apple.com/kb/DL999), keep the PC named `care`, re-check.
+
+**Option B — Static IP** (no extra software, no `.local`):
+- Give the PC a fixed IP (router DHCP reservation), e.g. `192.168.1.50`; staff open `http://192.168.1.50/`.
+- Also set `BUCKET_EXTERNAL_ENDPOINT=http://192.168.1.50:9100` in `backend.env`, and
+  `REACT_CARE_API_URL=http://192.168.1.50` in `frontend.env` (then `care rebuild-frontend`).
+- Since the frontend is built for `care.local` by default, **Option A is smoother** — use the static IP only if mDNS is blocked on your network.
+
+> **Client devices need nothing.** Macs, iPhones, and Linux resolve `care.local` out
+> of the box; modern Android usually does too (older Android may need the IP).
 
 ---
 
@@ -59,7 +65,7 @@ The installer shows gated steps — each must be green before **Install & Start*
 
 1. **Docker** — green when Docker Desktop is running.
 2. **Git** — green when Git for Windows is installed.
-3. **Network name — care.local** — green once Bonjour + the PC name (`care`) are set.
+3. **Network name — care.local** — green once `care.local` resolves (native on recent Windows 11 with a Private network + UDP 5353 allowed; otherwise via Bonjour — see step 2).
 4. **Install location** *(optional)*.
 5. **Backup location** *(optional)* — a USB/external drive is recommended.
 6. **Admin password** *(optional)* — blank = `admin`.

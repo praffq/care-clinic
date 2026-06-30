@@ -1,0 +1,17 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "care-clinic",
+  "outputfilename": "CARE Clinic",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "Open Healthcare Network"
+  },
+  "info": {
+    "productName": "CARE Clinic",
+    "productVersion": "0.1.0",
+    "comments": "Self-contained, offline CARE for a small clinic."
+  }
+}

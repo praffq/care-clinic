@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CARE Clinic</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <!-- ===== Installer view (first run) ===== -->
+    <div class="wrap view" id="wizard">
+      <header>
+        <div class="title"><h1>Welcome to CARE&nbsp;Clinic</h1></div>
+      </header>
+      <p class="lead">A one-time setup. Complete the three required checks, then Install &amp; Start.</p>
+
+      <section class="card">
+        <h2><span class="dot" id="dockerDot"></span> 1 · Docker <span class="req">required</span></h2>
+        <div class="docker-row">
+          <span id="dockerMsg">checking…</span>
+          <button id="check-docker" class="ghost">Check</button>
+        </div>
+        <p class="hint">CARE runs on Docker. Install <b>Docker Desktop</b>, start it, then Check.</p>
+      </section>
+
+      <section class="card">
+        <h2><span class="dot" id="gitDot"></span> 2 · Git <span class="req">required</span></h2>
+        <div class="docker-row">
+          <span id="gitMsg">checking…</span>
+          <button id="check-git" class="ghost">Check</button>
+        </div>
+        <p class="hint">Used once to download + build CARE. Install <b>Git</b> (Git for Windows / Xcode CLT / <code>apt-get git</code>), then Check.</p>
+      </section>
+
+      <section class="card">
+        <h2><span class="dot" id="mdnsDot"></span> 3 · Network name — <code>care.local</code> <span class="req">required</span></h2>
+        <div class="docker-row">
+          <span id="mdnsMsg">checking…</span>
+          <button id="check-mdns" class="ghost">Check</button>
+        </div>
+        <p class="hint" id="mdnsHow">Devices reach the clinic at <code>http://care.local</code>. This must be set before installing.</p>
+      </section>
+
+      <section class="card">
+        <h2>4 · Install location</h2>
+        <div class="docker-row">
+          <button id="choose-dir" class="ghost">Choose folder…</button>
+          <span id="dirPath">Default app location</span>
+        </div>
+        <p class="hint">Where CARE's files are installed. Patient data is stored in Docker regardless. Leave default if unsure.</p>
+      </section>
+
+      <section class="card">
+        <h2>5 · Backup location</h2>
+        <div class="docker-row">
+          <button id="choose-backup" class="ghost">Choose folder…</button>
+          <span id="backupPath">Desktop (default)</span>
+        </div>
+        <p class="hint">Daily database + file backups go here. Pick a USB/external drive so a dead disk doesn't take the backups with it. Leave default for the Desktop.</p>
+      </section>
+
+      <section class="card">
+        <h2>6 · Admin password</h2>
+        <label class="field">
+          <span>Password for the first admin login (username <b>admin</b>)</span>
+          <input id="adminpw" type="password" placeholder="leave blank to use 'admin'" />
+        </label>
+      </section>
+
+      <div class="wizard-actions">
+        <button id="install" class="primary" disabled>Install &amp; Start</button>
+        <span id="install-note" class="hint">Complete steps 1–3 to continue.</span>
+      </div>
+
+      <section class="console" id="wizard-console" hidden>
+        <div class="console-head"><span>Setup log</span></div>
+        <pre id="wizard-log"></pre>
+      </section>
+    </div>
+
+    <!-- ===== Control panel view (after setup) ===== -->
+    <div class="wrap view" id="panel" hidden>
+      <header>
+        <div class="title">
+          <h1>CARE&nbsp;Clinic</h1>
+          <div class="status">
+            <span id="dot" class="dot"></span>
+            <span id="statusText">checking…</span>
+          </div>
+        </div>
+        <a id="openLink" href="#" target="_blank" rel="noreferrer">Open ↗</a>
+      </header>
+
+      <section class="actions">
+        <button id="btn-start" class="primary">▶ Start</button>
+        <button id="btn-stop">■ Stop</button>
+        <button id="btn-restart">⟳ Restart</button>
+        <button id="btn-rebuild-frontend">⤓ Rebuild app</button>
+        <button id="btn-backup-now">⬇ Backup now</button>
+        <label class="autostart" title="Start CARE automatically when this computer turns on">
+          <input type="checkbox" id="autostart" />
+          <span>Start at login</span>
+        </label>
+      </section>
+
+      <section class="envs">
+        <details>
+          <summary>Backend settings — <code>backend.env</code></summary>
+          <p class="hint">Saving recreates the backend container so it re-reads these values. No image rebuild.</p>
+          <div id="be-form" class="env-form"></div>
+          <div class="env-form-actions">
+            <button id="be-add" class="ghost">+ Add variable</button>
+            <button id="be-save">Save &amp; apply</button>
+          </div>
+        </details>
+        <details>
+          <summary>Frontend settings — <code>frontend.env</code></summary>
+          <p class="hint">Vite bakes these at build time, so saving <b>rebuilds the app image</b> (a few minutes).</p>
+          <div id="fe-form" class="env-form"></div>
+          <div class="env-form-actions">
+            <button id="fe-add" class="ghost">+ Add variable</button>
+            <button id="fe-save">Save &amp; rebuild app</button>
+          </div>
+        </details>
+      </section>
+
+      <section class="console">
+        <div class="console-head">
+          <span>Log</span>
+          <button id="clear-log">clear</button>
+        </div>
+        <pre id="log"></pre>
+      </section>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

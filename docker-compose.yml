@@ -1,0 +1,116 @@
+name: care-clinic
+
+networks:
+  default:
+    name: care-clinic
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+  caddy-data:
+  caddy-config:
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    env_file: ./backend.env
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 10s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    volumes:
+      - minio-data:/data
+      - ./minio/entrypoint.sh:/entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    ports:
+      - "9100:9000"   # browser ↔ files (presigned URLs at http://care.local:9100)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
+      interval: 10s
+      retries: 5
+
+  backend:
+    image: ${BACKEND_IMAGE:-ghcr.io/ohcnetwork/care:latest}
+    restart: unless-stopped
+    env_file: ./backend.env
+    volumes:
+      - ./clinic_settings.py:/settings/clinic_settings.py:ro
+    entrypoint: ["bash", "start.sh"]
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+  celery-worker:
+    image: ${BACKEND_IMAGE:-ghcr.io/ohcnetwork/care:latest}
+    restart: unless-stopped
+    env_file: ./backend.env
+    volumes:
+      - ./clinic_settings.py:/settings/clinic_settings.py:ro
+    entrypoint: ["bash", "celery_worker.sh"]
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+  celery-beat:
+    image: ${BACKEND_IMAGE:-ghcr.io/ohcnetwork/care:latest}
+    restart: unless-stopped
+    env_file: ./backend.env
+    volumes:
+      - ./clinic_settings.py:/settings/clinic_settings.py:ro
+    entrypoint: ["bash", "celery_beat.sh"]
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-care_fe:clinic}   # built by `care setup` / `care rebuild-frontend`
+    restart: unless-stopped
+    depends_on:
+      - backend
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"               # the clinic app: http://care.local/
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - backend
+      - frontend
+
+  backup:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    env_file: ./backend.env
+    volumes:
+      - ./scripts/backup.sh:/backup.sh:ro
+      - ${BACKUP_DIR:-./db-backups}:/backups     # the app points this at your Desktop/chosen folder
+      - minio-data:/minio-data:ro
+    entrypoint: ["/bin/sh", "/backup.sh"]
+    depends_on:
+      db: {condition: service_healthy}

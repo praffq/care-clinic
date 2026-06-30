@@ -1,0 +1,196 @@
+// Package care is the cross-platform engine that drives the CARE clinic stack.
+// It replaces the old care.sh: every action is plain Go calling `docker`/`git`,
+// so it runs identically on macOS, Linux, and Windows with no shell dependency.
+package care
+
+import (
+	"bufio"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+)
+
+// Engine runs CARE actions against a kit directory (the folder holding
+// docker-compose.yml, the env files, and the mounted configs).
+type Engine struct {
+	Kit string            // dir with docker-compose.yml, *.env, clinic_settings.py, ...
+	Env map[string]string // overrides: BACKUP_DIR, CARE_MDNS_NAME, CARE_ADMIN_PASSWORD, CARE_NO_MDNS
+	Log func(string)      // optional sink for streamed output (one line at a time)
+
+	versions map[string]string // parsed versions.env (lazy)
+	once     sync.Once
+}
+
+func (e *Engine) logln(s string) {
+	if e.Log != nil {
+		e.Log(s)
+	}
+}
+
+// get resolves a setting: explicit Env override > process env > versions.env > default.
+func (e *Engine) get(key, def string) string {
+	if e.Env != nil {
+		if v, ok := e.Env[key]; ok && v != "" {
+			return v
+		}
+	}
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	e.once.Do(e.loadVersions)
+	if v, ok := e.versions[key]; ok && v != "" {
+		return v
+	}
+	return def
+}
+
+func (e *Engine) loadVersions() {
+	e.versions = map[string]string{}
+	b, err := os.ReadFile(filepath.Join(e.Kit, "versions.env"))
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if k, v, ok := strings.Cut(line, "="); ok {
+			e.versions[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		}
+	}
+}
+
+// --- settings (mirror care.sh defaults) -------------------------------------
+
+func (e *Engine) backendImage() string  { return e.get("BACKEND_IMAGE", "care:clinic") }
+func (e *Engine) frontendImage() string { return e.get("FRONTEND_IMAGE", "care_fe:clinic") }
+func (e *Engine) beRepo() string {
+	return e.get("CARE_BE_REPO", "https://github.com/ohcnetwork/care.git")
+}
+func (e *Engine) feRepo() string {
+	return e.get("CARE_FE_REPO", "https://github.com/ohcnetwork/care_fe.git")
+}
+func (e *Engine) beRef() string  { return e.get("CARE_BE_REF", "develop") }
+func (e *Engine) feRef() string  { return e.get("CARE_FE_REF", "develop") }
+func (e *Engine) beDir() string  { return e.get("CARE_BE_DIR", filepath.Join(e.Kit, "care")) }
+func (e *Engine) feDir() string  { return e.get("CARE_FE_DIR", filepath.Join(e.Kit, "care_fe")) }
+func (e *Engine) mdnsName() string { return e.get("CARE_MDNS_NAME", "care") }
+func (e *Engine) adminPassword() string { return e.get("CARE_ADMIN_PASSWORD", "admin") }
+func (e *Engine) noMDNS() bool   { return e.get("CARE_NO_MDNS", "0") == "1" }
+
+func (e *Engine) backupDir() string {
+	if d := e.get("BACKUP_DIR", ""); d != "" {
+		return d
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, "Desktop", "care-db-backups")
+}
+
+// --- process plumbing -------------------------------------------------------
+
+// augmentedPath prepends the dirs where docker/git live (a GUI-launched app
+// inherits a minimal PATH), with the right separator per OS.
+func augmentedPath() string {
+	var parts []string
+	sep := ":"
+	if runtime.GOOS == "windows" {
+		sep = ";"
+		parts = []string{
+			`C:\Program Files\Docker\Docker\resources\bin`,
+			`C:\Program Files\Git\bin`,
+			`C:\Program Files\Git\cmd`,
+		}
+	} else {
+		// include /usr/sbin + /sbin (scutil, hostname) and homebrew sbin — a
+		// Finder-launched .app gets a minimal PATH that often omits these.
+		parts = []string{
+			"/opt/homebrew/bin", "/opt/homebrew/sbin",
+			"/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin",
+		}
+	}
+	if existing := os.Getenv("PATH"); existing != "" {
+		parts = append(parts, existing)
+	}
+	return strings.Join(parts, sep)
+}
+
+// baseEnv is the environment every docker/git call gets: the inherited env, an
+// augmented PATH, and the vars docker-compose.yml reads.
+func (e *Engine) baseEnv() []string {
+	env := os.Environ()
+	set := func(k, v string) { env = append(env, k+"="+v) }
+	set("PATH", augmentedPath())
+	set("BACKEND_IMAGE", e.backendImage())
+	set("FRONTEND_IMAGE", e.frontendImage())
+	set("MINIO_ACCESS_KEY", "minioadmin")
+	set("MINIO_SECRET_KEY", "minioadmin")
+	set("BACKUP_DIR", e.backupDir())
+	for k, v := range e.Env {
+		set(k, v)
+	}
+	return env
+}
+
+// workdir returns the kit dir only if it exists — before setup it doesn't, and a
+// command with a missing Dir fails to start (which silently broke the pre-setup
+// scutil/hostname checks). Empty means "inherit the current dir".
+func (e *Engine) workdir() string {
+	if st, err := os.Stat(e.Kit); err == nil && st.IsDir() {
+		return e.Kit
+	}
+	return ""
+}
+
+// run executes a command in the kit dir and streams stdout+stderr to Log.
+func (e *Engine) run(extraEnv []string, name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = e.workdir()
+	cmd.Env = append(e.baseEnv(), extraEnv...)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start %s: %w", name, err)
+	}
+	var wg sync.WaitGroup
+	stream := func(r io.Reader) {
+		defer wg.Done()
+		sc := bufio.NewScanner(r)
+		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for sc.Scan() {
+			e.logln(sc.Text())
+		}
+	}
+	wg.Add(2)
+	go stream(stdout)
+	go stream(stderr)
+	wg.Wait()
+	return cmd.Wait()
+}
+
+// capture runs a command and returns its trimmed stdout (no streaming).
+func (e *Engine) capture(name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = e.workdir()
+	cmd.Env = e.baseEnv()
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err
+}
+
+// dc runs `docker compose <args>` (streamed). Project name comes from the
+// compose `name:` key — we never pass -v, so volumes/data always survive.
+func (e *Engine) dc(args ...string) error {
+	return e.run(nil, "docker", append([]string{"compose"}, args...)...)
+}

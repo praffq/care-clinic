@@ -1,0 +1,303 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"care-clinic/app/internal/care"
+
+	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
+)
+
+// App is the Wails bridge: every exported method is callable from the web UI as
+// window.go.main.App.<Method>. It owns config persistence and drives the engine.
+type App struct {
+	ctx context.Context
+	kit fs.FS // embedded deployment kit
+}
+
+func NewApp(kit fs.FS) *App { return &App{kit: kit} }
+
+func (a *App) startup(ctx context.Context) { a.ctx = ctx }
+
+// --- persisted config -------------------------------------------------------
+
+type Config struct {
+	SetupDone  bool   `json:"setup_done"`
+	MDNSName   string `json:"mdns_name"`
+	InstallDir string `json:"install_dir"`
+	BackupDir  string `json:"backup_dir"`
+}
+
+func (a *App) configPath() string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		dir, _ = os.UserHomeDir()
+	}
+	dir = filepath.Join(dir, "care-clinic")
+	_ = os.MkdirAll(dir, 0o755)
+	return filepath.Join(dir, "config.json")
+}
+
+func (a *App) loadConfig() Config {
+	cfg := Config{MDNSName: "care.local"}
+	b, err := os.ReadFile(a.configPath())
+	if err == nil {
+		_ = json.Unmarshal(b, &cfg)
+	}
+	if cfg.MDNSName == "" {
+		cfg.MDNSName = "care.local"
+	}
+	return cfg
+}
+
+func (a *App) saveConfig(cfg Config) error {
+	b, _ := json.MarshalIndent(cfg, "", "  ")
+	return os.WriteFile(a.configPath(), b, 0o644)
+}
+
+// --- kit location + first-run unpack ----------------------------------------
+
+func (a *App) kitDir() string {
+	if d := os.Getenv("CARE_CLINIC_DIR"); d != "" {
+		return d
+	}
+	if cfg := a.loadConfig(); cfg.InstallDir != "" {
+		return cfg.InstallDir
+	}
+	base, err := os.UserConfigDir()
+	if err != nil {
+		base, _ = os.UserHomeDir()
+	}
+	return filepath.Join(base, "care-clinic", "kit")
+}
+
+// ensureKit unpacks the embedded kit into the writable kit dir once; existing
+// (user-edited) files are left untouched.
+func (a *App) ensureKit() (string, error) {
+	dest := a.kitDir()
+	if _, err := os.Stat(filepath.Join(dest, "docker-compose.yml")); err == nil {
+		return dest, nil
+	}
+	err := fs.WalkDir(a.kit, "kit", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel := strings.TrimPrefix(p, "kit")
+		rel = strings.TrimPrefix(rel, "/")
+		if rel == "" {
+			return nil
+		}
+		target := filepath.Join(dest, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := fs.ReadFile(a.kit, p)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		mode := os.FileMode(0o644)
+		if strings.HasSuffix(rel, ".sh") {
+			mode = 0o755
+		}
+		return os.WriteFile(target, data, mode)
+	})
+	return dest, err
+}
+
+// engine builds an Engine bound to the kit dir, streaming logs to the UI.
+func (a *App) engine(extra map[string]string) *care.Engine {
+	env := map[string]string{}
+	if cfg := a.loadConfig(); cfg.BackupDir != "" {
+		env["BACKUP_DIR"] = cfg.BackupDir
+	}
+	for k, v := range extra {
+		env[k] = v
+	}
+	return &care.Engine{
+		Kit: a.kitDir(),
+		Env: env,
+		Log: func(s string) { wruntime.EventsEmit(a.ctx, "care-log", s) },
+	}
+}
+
+// --- state the installer/panel read on load ---------------------------------
+
+type AppState struct {
+	SetupDone bool              `json:"setup_done"`
+	MDNSName  string            `json:"mdns_name"`
+	Docker    care.DockerStatus `json:"docker"`
+}
+
+func (a *App) GetState() AppState {
+	cfg := a.loadConfig()
+	return AppState{
+		SetupDone: cfg.SetupDone,
+		MDNSName:  cfg.MDNSName,
+		Docker:    a.engine(nil).DockerCheck(),
+	}
+}
+
+func (a *App) DockerStatus() care.DockerStatus { return a.engine(nil).DockerCheck() }
+func (a *App) GitStatus() care.DockerStatus     { return a.engine(nil).GitCheck() }
+func (a *App) MDNSStatus() care.NameStatus       { return a.engine(nil).MDNSCheck() }
+func (a *App) CareHealth() care.Health           { return a.engine(nil).Ping() }
+
+// --- actions (async; stream logs, finish with a care-done event) ------------
+
+var allowed = map[string]bool{
+	"start": true, "stop": true, "restart": true,
+	"rebuild-backend": true, "rebuild-frontend": true, "backup-now": true,
+}
+
+func (a *App) run(e *care.Engine, fn func() error, markSetup bool) {
+	go func() {
+		code := 0
+		if err := fn(); err != nil {
+			wruntime.EventsEmit(a.ctx, "care-log", "error: "+err.Error())
+			code = 1
+		}
+		if markSetup && code == 0 {
+			cfg := a.loadConfig()
+			cfg.SetupDone = true
+			_ = a.saveConfig(cfg)
+			wruntime.EventsEmit(a.ctx, "setup-done", true)
+		}
+		wruntime.EventsEmit(a.ctx, "care-done", code)
+	}()
+}
+
+// CareAction runs one whitelisted action against the existing kit.
+func (a *App) CareAction(action string) error {
+	if !allowed[action] {
+		return errString("action not allowed: " + action)
+	}
+	if _, err := os.Stat(filepath.Join(a.kitDir(), "docker-compose.yml")); err != nil {
+		return errString("not set up yet — run the first-time setup")
+	}
+	e := a.engine(nil)
+	a.run(e, actionFunc(e, action), false)
+	return nil
+}
+
+func actionFunc(e *care.Engine, action string) func() error {
+	switch action {
+	case "start":
+		return e.Start
+	case "stop":
+		return e.Stop
+	case "restart":
+		return e.Restart
+	case "rebuild-backend":
+		return e.RebuildBackend
+	case "rebuild-frontend":
+		return e.RebuildFrontend
+	case "backup-now":
+		return e.BackupNow
+	}
+	return func() error { return errString("unknown action") }
+}
+
+// RunSetup persists the wizard's choices, unpacks the kit, then runs setup+start.
+func (a *App) RunSetup(mdnsName, adminPassword, installDir, backupDir string) error {
+	mdns := strings.TrimSpace(mdnsName)
+	if mdns == "" {
+		mdns = "care.local"
+	}
+	host := strings.TrimSuffix(mdns, ".local")
+
+	cfg := a.loadConfig()
+	cfg.MDNSName = mdns
+	if strings.TrimSpace(installDir) != "" {
+		cfg.InstallDir = filepath.Join(strings.TrimSpace(installDir), "CARE Clinic")
+	}
+	if strings.TrimSpace(backupDir) != "" {
+		cfg.BackupDir = filepath.Join(strings.TrimSpace(backupDir), "care-db-backups")
+	}
+	if err := a.saveConfig(cfg); err != nil {
+		return err
+	}
+	if _, err := a.ensureKit(); err != nil {
+		return err
+	}
+
+	adminPw := adminPassword
+	if adminPw == "" {
+		adminPw = "admin"
+	}
+	e := a.engine(map[string]string{
+		"CARE_MDNS_NAME":      host,
+		"CARE_ADMIN_PASSWORD": adminPw,
+		"CARE_NO_MDNS":        "1", // naming is a verified wizard step; don't retry sudo here
+	})
+	a.run(e, func() error {
+		if err := e.Setup(); err != nil {
+			return err
+		}
+		return e.Start()
+	}, true)
+	return nil
+}
+
+func (a *App) CareStatus() (string, error) { return a.engine(nil).Status() }
+
+// --- env editing ------------------------------------------------------------
+
+func (a *App) envPath(name string) (string, error) {
+	switch name {
+	case "backend":
+		return filepath.Join(a.kitDir(), "backend.env"), nil
+	case "frontend":
+		return filepath.Join(a.kitDir(), "frontend.env"), nil
+	}
+	return "", errString("unknown env file: " + name)
+}
+
+func (a *App) ReadEnv(name string) (string, error) {
+	p, err := a.envPath(name)
+	if err != nil {
+		return "", err
+	}
+	b, err := os.ReadFile(p)
+	return string(b), err
+}
+
+func (a *App) WriteEnv(name, content string) error {
+	p, err := a.envPath(name)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(p, []byte(content), 0o644)
+}
+
+// --- misc UI helpers --------------------------------------------------------
+
+func (a *App) OpenURL(url string) { wruntime.BrowserOpenURL(a.ctx, url) }
+
+func (a *App) ChooseFolder(title string) string {
+	dir, err := wruntime.OpenDirectoryDialog(a.ctx, wruntime.OpenDialogOptions{Title: title})
+	if err != nil {
+		return ""
+	}
+	return dir
+}
+
+func (a *App) WasAutostartLaunched() bool {
+	for _, arg := range os.Args {
+		if arg == "--autostart" {
+			return true
+		}
+	}
+	return false
+}
+
+type errString string
+
+func (e errString) Error() string { return string(e) }

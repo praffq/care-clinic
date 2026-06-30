@@ -1,0 +1,15 @@
+# build artifacts
+build/bin/
+# staged at build time from the repo-root kit (source of truth lives at ../) —
+# only the placeholder is tracked, so //go:embed compiles on a clean checkout.
+kit/*
+!kit/.gitkeep
+# frontend
+frontend/node_modules/
+frontend/dist/*
+!frontend/dist/.gitkeep
+# wails-generated (bindings + dep hash are regenerated each build/dev)
+frontend/wailsjs/
+frontend/package.json.md5
+# wails dev
+.wails/

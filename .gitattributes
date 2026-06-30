@@ -1,0 +1,4 @@
+# minio/entrypoint.sh and scripts/backup.sh run inside Linux containers — keep
+# them LF so a Windows checkout can't introduce CRLF that the container shell trips on.
+*.sh text eol=lf
+Caddyfile text eol=lf

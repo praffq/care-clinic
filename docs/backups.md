@@ -38,55 +38,73 @@ Both are needed for a full restore — the database alone won't bring back an X-
 
 ---
 
-## Restore the database
+## Restore a backup
 
-Stop the app first so nothing is writing, then drop + recreate + restore:
+Restore is **built in** — you don't run the SQL by hand. It stops the app services,
+drops + re-creates the database from the dump, restores the uploaded files (when the
+backup has them), then brings CARE back up and migrates.
+
+> ⚠️ **Restoring replaces the current data and can't be undone.** Take a fresh
+> **Backup now** first if you're unsure.
+
+### In the app
+
+Open the control panel → **Restore from a backup**. Pick a point from the dropdown
+(each is labelled with its date, whether it's a *daily* or *manual* backup, and
+whether it includes files), click **Restore**, and confirm. Progress streams to the
+log; the app restarts itself when it's done.
+
+### From the CLI
+
+```bash
+care list-backups                      # newest first; copy the dump name
+care restore care-YYYYMMDD-HHMMSS.dump  # DB + same-timestamp files, if present
+```
+
+- The matching `files-<timestamp>.tar.gz` is **paired automatically** by timestamp.
+  To restore a different pair (or DB only), pass the files archive explicitly (or a
+  dump that has none, like a manual `care-manual-*.dump`):
+  ```bash
+  care restore care-20260701-020000.dump files-20260701-020000.tar.gz
+  ```
+- Both the app and the CLI restore the same way — set up with one, restore with the other.
+
+> Match the **database** dump and the **files** archive from the **same timestamp**
+> for a consistent restore (the automatic pairing does this for you).
+
+<details>
+<summary>Manual restore (fallback, if you ever need it)</summary>
+
+The built-in restore does exactly this. Stop the app first so nothing is writing:
 
 ```bash
 care stop && docker compose -p care-clinic up -d db
 
 docker compose -p care-clinic exec -T db psql -U postgres -c "DROP DATABASE IF EXISTS care;"
 docker compose -p care-clinic exec -T db psql -U postgres -c "CREATE DATABASE care;"
-
 cat ~/Desktop/care-db-backups/care-YYYYMMDD-HHMMSS.dump | \
   docker compose -p care-clinic exec -T db pg_restore -U postgres -d care
 
-care start
-```
-
-Replace the dump filename with the one you want to restore.
-
----
-
-## Restore uploaded files
-
-The `files-<timestamp>.tar.gz` archive holds the MinIO data. Restore it into the
-MinIO volume with a throwaway Alpine container (which has `tar`), while the stack is
-stopped:
-
-```bash
-care stop
+# files: extract the archive into the MinIO volume (care-clinic_minio-data)
 docker run --rm \
   -v care-clinic_minio-data:/data \
   -v ~/Desktop/care-db-backups:/backup \
   alpine sh -c 'cd /data && tar -xzf /backup/files-YYYYMMDD-HHMMSS.tar.gz'
+
 care start
 ```
 
-- `care-clinic_minio-data` is the Docker volume (project name `care-clinic` + volume `minio-data`).
-- Point the second `-v` at your actual backup folder if it isn't the Desktop default.
-
-> Match the **database** dump and the **files** archive from the **same timestamp**
-> for a consistent restore.
+</details>
 
 ---
 
 ## Moving the whole clinic to a new computer
 
 1. On the old server: take a fresh backup (**Backup now**), copy the backup folder to a USB.
-2. On the new server: install CARE Clinic (it builds a fresh, empty stack).
-3. `care stop`, then restore the database and files as above from the USB.
-4. `care start`.
+2. On the new server: install CARE Clinic (it builds a fresh, empty stack), and point its
+   backup folder at the USB (installer step 5, or `BACKUP_DIR` for the CLI).
+3. Restore that backup — **Restore from a backup** in the app, or `care restore <dump>`.
+   (Restore stops and restarts the stack itself.)
 
 Because patient data lives in the Docker **volumes** (captured by the backups), this
 moves everything — records and files — to the new box.

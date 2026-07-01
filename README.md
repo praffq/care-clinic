@@ -66,5 +66,5 @@ time. The core CARE app is **never modified**.
 - **Offline-first** — everything stays in the building; no internet needed to use it.
 - **No-terminal option** — the desktop app installs + runs CARE with a few clicks.
 - **Cross-platform** — one Go binary per OS; Windows needs no WSL or bash.
-- **Data-safe** — daily DB + file backups; the app never deletes your volumes.
+- **Data-safe** — daily DB + file backups with **one-click restore**; the app never deletes your volumes.
 - **No core changes** — runs CARE's own images/source, configured from the outside.

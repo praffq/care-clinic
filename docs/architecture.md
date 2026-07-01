@@ -29,6 +29,9 @@ What the engine does:
 | `rebuild-frontend` | rebuild the frontend image (Vite bakes settings at build time) |
 | `status` | report each container's state |
 | `backup-now` | write an immediate database dump |
+| `list-backups` | list the restorable points in the backup folder |
+| `restore` | stop app services → drop + re-create the DB from a chosen dump → (optionally) overwrite the MinIO volume from the matching files archive → bring the stack back up + migrate |
+| `uninstall` | `compose down -v` (containers + network + **data volumes**) → optionally remove images → delete the clones + kit dir → optionally delete backups. The app also clears its config + login-item so the next launch is a fresh first-run |
 
 ### 2. The runtime layer (Docker containers)
 The actual CARE stack, defined in `docker-compose.yml`. Project name is

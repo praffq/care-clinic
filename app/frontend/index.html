@@ -122,6 +122,21 @@
             <button id="fe-save">Save &amp; rebuild app</button>
           </div>
         </details>
+        <details>
+          <summary>Restore from a backup</summary>
+          <p class="hint warn">
+            Restoring <b>replaces</b> the current database (and uploaded files, when the backup
+            has them) with the one you pick. CARE is stopped during the restore and restarted after.
+            <b>This can't be undone</b> — take a fresh <b>Backup now</b> first if unsure.
+          </p>
+          <div class="restore-row">
+            <select id="restore-select" class="restore-select">
+              <option value="">No backups found</option>
+            </select>
+            <button id="restore-refresh" class="ghost">Refresh</button>
+            <button id="restore-run" class="danger" disabled>Restore</button>
+          </div>
+        </details>
       </section>
 
       <section class="console">
@@ -130,6 +145,28 @@
           <button id="clear-log">clear</button>
         </div>
         <pre id="log"></pre>
+      </section>
+
+      <section class="danger-zone">
+        <details>
+          <summary>⚠ Uninstall CARE Clinic</summary>
+          <p class="hint warn">
+            Removes CARE's containers and <b>all data volumes</b> (patient records and uploaded
+            files), the installed files, and the downloaded source. <b>This permanently deletes all
+            patient data and can't be undone.</b> Make sure you have a backup you can rely on first.
+          </p>
+          <label class="danger-opt">
+            <input type="checkbox" id="uninstall-images" />
+            <span>Also remove Docker images (frees disk; re-downloaded on next install)</span>
+          </label>
+          <label class="danger-opt">
+            <input type="checkbox" id="uninstall-backups" />
+            <span>Also delete backups — <b>no way to recover the data afterward</b></span>
+          </label>
+          <div class="danger-actions">
+            <button id="uninstall-run" class="danger">Uninstall everything</button>
+          </div>
+        </details>
       </section>
     </div>
 

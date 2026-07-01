@@ -13,6 +13,7 @@ const $ = <T extends HTMLElement>(sel: string): T => {
 type DockerStatus = { ok: boolean; message: string };
 type Health = { active: boolean; code: number; detail: string };
 type AppState = { setup_done: boolean; mdns_name: string; docker: DockerStatus };
+type Backup = { db_dump: string; files_archive: string; label: string; manual: boolean; size_bytes: number };
 type State = "running" | "partial" | "stopped" | "unknown";
 
 let phase: "setup" | "panel" = "setup";
@@ -255,6 +256,11 @@ let busy = false;
 let lastState: State = "unknown";
 let mdnsName = "care.local";
 
+const restoreSelect = $<HTMLSelectElement>("#restore-select");
+const uninstallImages = $<HTMLInputElement>("#uninstall-images");
+const uninstallBackups = $<HTMLInputElement>("#uninstall-backups");
+let backups: Backup[] = [];
+
 const buttons = {
   start: $<HTMLButtonElement>("#btn-start"),
   stop: $<HTMLButtonElement>("#btn-stop"),
@@ -265,6 +271,9 @@ const buttons = {
   feSave: $<HTMLButtonElement>("#fe-save"),
   beAdd: $<HTMLButtonElement>("#be-add"),
   feAdd: $<HTMLButtonElement>("#fe-add"),
+  restoreRun: $<HTMLButtonElement>("#restore-run"),
+  restoreRefresh: $<HTMLButtonElement>("#restore-refresh"),
+  uninstall: $<HTMLButtonElement>("#uninstall-run"),
 };
 
 function disableAll(): void {
@@ -284,6 +293,12 @@ function applyState(state: State): void {
   buttons.feSave.disabled = busy;
   buttons.beAdd.disabled = busy;
   buttons.feAdd.disabled = busy;
+  buttons.restoreRefresh.disabled = busy;
+  restoreSelect.disabled = busy;
+  buttons.restoreRun.disabled = busy || restoreSelect.value === "";
+  buttons.uninstall.disabled = busy;
+  uninstallImages.disabled = busy;
+  uninstallBackups.disabled = busy;
 
   statusDot.className = "dot " + (running ? "running" : partial ? "partial" : stopped ? "stopped" : "");
   statusText.textContent = running
@@ -370,6 +385,62 @@ buttons.feSave.addEventListener("click", () => {
   })();
 });
 
+// ---- restore from backup --------------------------------------------------
+async function loadBackups(): Promise<void> {
+  try {
+    backups = await App.ListBackups();
+  } catch {
+    backups = [];
+  }
+  restoreSelect.innerHTML = "";
+  if (backups.length === 0) {
+    restoreSelect.appendChild(new Option("No backups found", ""));
+  } else {
+    restoreSelect.appendChild(new Option("Choose a backup to restore…", ""));
+    for (const b of backups) restoreSelect.appendChild(new Option(b.label, b.db_dump));
+  }
+  applyState(lastState); // refresh the Restore button's enabled state
+}
+
+async function runRestore(): Promise<void> {
+  if (busy) return;
+  const dump = restoreSelect.value;
+  const b = backups.find((x) => x.db_dump === dump);
+  if (!b) return;
+  const ok = await App.ConfirmRestore(b.files_archive !== "");
+  if (!ok) return;
+  setBusy(true);
+  append(`\n$ care restore ${b.db_dump}${b.files_archive ? ` ${b.files_archive}` : ""}   # replaces current data`);
+  try {
+    await App.RestoreBackup(b.db_dump, b.files_archive);
+  } catch (e) {
+    append(`error: ${String(e)}`);
+    setBusy(false);
+  }
+}
+
+restoreSelect.addEventListener("change", () => applyState(lastState));
+buttons.restoreRefresh.addEventListener("click", () => void loadBackups());
+buttons.restoreRun.addEventListener("click", () => void runRestore());
+
+// ---- uninstall (danger zone) ----------------------------------------------
+async function runUninstall(): Promise<void> {
+  if (busy) return;
+  const rmBackups = uninstallBackups.checked;
+  const ok = await App.ConfirmUninstall(rmBackups);
+  if (!ok) return;
+  setBusy(true);
+  const flags = `${uninstallImages.checked ? " --images" : ""}${rmBackups ? " --backups" : ""}`;
+  append(`\n$ care uninstall${flags} --yes   # removes everything`);
+  try {
+    await App.RunUninstall(uninstallImages.checked, rmBackups);
+  } catch (e) {
+    append(`error: ${String(e)}`);
+    setBusy(false);
+  }
+}
+buttons.uninstall.addEventListener("click", () => void runUninstall());
+
 $("#clear-log").addEventListener("click", () => {
   logEl.textContent = "";
 });
@@ -417,12 +488,17 @@ on("care-done", (code: number) => {
   append(`— done (exit ${code}) —`);
   setBusy(false);
   void refresh();
+  void loadBackups(); // reflect a fresh "Backup now" / post-restore state
 });
 on("setup-done", () => {
   append("\n✔ Setup complete — opening the control panel…");
   phase = "panel";
   showView("panel");
   void bootPanel();
+});
+on("uninstalled", () => {
+  append("\n✔ Uninstalled — resetting to first-run setup…");
+  setTimeout(() => window.location.reload(), 1800); // config is gone → reload lands on the wizard
 });
 
 // ===========================================================================
@@ -436,6 +512,7 @@ async function bootPanel(): Promise<void> {
 
   await beEditor.load();
   await feEditor.load();
+  await loadBackups();
   await refresh();
 
   await syncAutostart();

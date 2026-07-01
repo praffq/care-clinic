@@ -251,6 +251,88 @@ func (a *App) RunSetup(mdnsName, adminPassword, installDir, backupDir string) er
 
 func (a *App) CareStatus() (string, error) { return a.engine(nil).Status() }
 
+// --- restore ----------------------------------------------------------------
+
+// ListBackups returns the restorable points in the backup folder (newest first)
+// for the panel's restore dropdown.
+func (a *App) ListBackups() ([]care.Backup, error) {
+	if _, err := os.Stat(filepath.Join(a.kitDir(), "docker-compose.yml")); err != nil {
+		return nil, nil // not set up yet — no backups to offer
+	}
+	return a.engine(nil).ListBackups()
+}
+
+// ConfirmRestore shows a native yes/no dialog before a destructive restore, so
+// the (irreversible) data replacement is never a single stray click.
+func (a *App) ConfirmRestore(filesIncluded bool) bool {
+	what := "the current database"
+	if filesIncluded {
+		what = "the current database and uploaded files"
+	}
+	sel, err := wruntime.MessageDialog(a.ctx, wruntime.MessageDialogOptions{
+		Type:          wruntime.QuestionDialog,
+		Title:         "Restore from backup?",
+		Message:       "This replaces " + what + " with the selected backup and cannot be undone.\nCARE will be stopped during the restore, then restarted.\n\nContinue?",
+		Buttons:       []string{"Restore", "Cancel"},
+		DefaultButton: "Cancel",
+	})
+	return err == nil && sel == "Restore"
+}
+
+// RestoreBackup runs an async restore of the chosen dump (+ optional files
+// archive), streaming logs and finishing with a care-done event.
+func (a *App) RestoreBackup(dbDump, filesArchive string) error {
+	if _, err := os.Stat(filepath.Join(a.kitDir(), "docker-compose.yml")); err != nil {
+		return errString("not set up yet — run the first-time setup")
+	}
+	e := a.engine(nil)
+	a.run(e, func() error { return e.Restore(dbDump, filesArchive) }, false)
+	return nil
+}
+
+// --- uninstall --------------------------------------------------------------
+
+// ConfirmUninstall shows a stern native warning before the (irreversible) teardown.
+func (a *App) ConfirmUninstall(removeBackups bool) bool {
+	msg := "This permanently deletes CARE and all of its data:\n" +
+		"• every container and data volume (patient records + uploaded files)\n" +
+		"• the installed files and downloaded source\n"
+	if removeBackups {
+		msg += "• your backups — there will be NO way to recover the data\n"
+	} else {
+		msg += "\nYour backups are kept.\n"
+	}
+	msg += "\nThis cannot be undone. Continue?"
+	sel, err := wruntime.MessageDialog(a.ctx, wruntime.MessageDialogOptions{
+		Type:          wruntime.WarningDialog,
+		Title:         "Uninstall CARE Clinic?",
+		Message:       msg,
+		Buttons:       []string{"Uninstall", "Cancel"},
+		DefaultButton: "Cancel",
+	})
+	return err == nil && sel == "Uninstall"
+}
+
+// RunUninstall tears the install down (async, streaming logs), then clears the
+// app's own state — autostart entry and saved config — and signals the UI to
+// reset to first-run via an "uninstalled" event.
+func (a *App) RunUninstall(removeImages, removeBackups bool) error {
+	e := a.engine(nil)
+	go func() {
+		_ = e.Uninstall(care.UninstallOptions{
+			RemoveImages:  removeImages,
+			RemoveKit:     true,
+			RemoveBackups: removeBackups,
+		})
+		_ = a.SetAutostart(false)     // remove the login-item, if any
+		_ = os.Remove(a.configPath()) // forget setup — next launch shows the wizard
+		wruntime.EventsEmit(a.ctx, "care-log", "")
+		wruntime.EventsEmit(a.ctx, "care-log", "✔ Uninstalled. This computer's name was not changed back.")
+		wruntime.EventsEmit(a.ctx, "uninstalled", true)
+	}()
+	return nil
+}
+
 // --- env editing ------------------------------------------------------------
 
 func (a *App) envPath(name string) (string, error) {

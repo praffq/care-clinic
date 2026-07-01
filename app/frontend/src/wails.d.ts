@@ -8,6 +8,13 @@ type DockerStatus = { ok: boolean; message: string };
 type NameStatus = { ok: boolean; message: string; how: string };
 type Health = { active: boolean; code: number; detail: string };
 type AppState = { setup_done: boolean; mdns_name: string; docker: DockerStatus };
+type Backup = {
+  db_dump: string;
+  files_archive: string;
+  label: string;
+  manual: boolean;
+  size_bytes: number;
+};
 
 declare global {
   interface Window {
@@ -29,6 +36,11 @@ declare global {
           ): Promise<void>;
           ReadEnv(name: string): Promise<string>;
           WriteEnv(name: string, content: string): Promise<void>;
+          ListBackups(): Promise<Backup[]>;
+          ConfirmRestore(filesIncluded: boolean): Promise<boolean>;
+          RestoreBackup(dbDump: string, filesArchive: string): Promise<void>;
+          ConfirmUninstall(removeBackups: boolean): Promise<boolean>;
+          RunUninstall(removeImages: boolean, removeBackups: boolean): Promise<void>;
           OpenURL(url: string): Promise<void>;
           ChooseFolder(title: string): Promise<string>;
           WasAutostartLaunched(): Promise<boolean>;

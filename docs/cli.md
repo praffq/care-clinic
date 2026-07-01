@@ -32,6 +32,9 @@ care status
 | `care rebuild-frontend` | Rebuild the frontend image (after editing `frontend.env`). |
 | `care status` | Print each container's service + state. |
 | `care backup-now` | Write an immediate database dump into the backup folder. |
+| `care list-backups` | List the restorable points in the backup folder, newest first. |
+| `care restore <dump> [files.tar.gz]` | Restore a backup: drop + re-create the DB from `<dump>`, and (if a `files-*.tar.gz` is given, or auto-paired by timestamp) restore the uploaded files. **Replaces current data.** |
+| `care uninstall [--images] [--backups] --yes` | Remove everything: containers, network, **all data volumes**, the installed files, and the downloaded source. `--images` also removes the Docker images; `--backups` also deletes the backup folder. Requires `--yes`. |
 
 ## Useful environment variables
 
@@ -50,9 +53,23 @@ BACKUP_DIR=/mnt/usb/care-backups CARE_ADMIN_PASSWORD=changeme care setup
 BACKUP_DIR=/mnt/usb/care-backups care start
 ```
 
+Example — restore the latest backup on this box:
+```bash
+cd care-clinic
+care list-backups                      # copy the dump name you want
+care restore care-20260701-020000.dump # DB + same-timestamp files, if present
+```
+
 ## Notes
 - Every command streams its progress to the terminal and exits non-zero on failure
   (so it's CI/script friendly).
+- `care restore` is destructive: it drops the current database before loading the
+  dump. It stops the app services during the swap and restarts them after. Take a
+  fresh `care backup-now` first if you're unsure.
+- `care uninstall` deletes the data volumes, so it **won't run without `--yes`** —
+  without it, it just prints what it would remove. Backups are kept unless you add
+  `--backups`. Run from the repo root, it cleans Docker + the clones but leaves the
+  source checkout itself in place. It does not rename the computer back.
 - `care` never passes `-v` to `docker compose`, so **data volumes always survive**
   stop/start/rebuild. The only way to delete data is to remove the volumes yourself.
 - The CLI and the desktop app are interchangeable — you can set up with one and

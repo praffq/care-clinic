@@ -16,11 +16,19 @@ func (e *Engine) Start() error {
 	}
 	e.ensureMDNS()
 	e.logln("Starting CARE...")
-	if err := e.dc("up", "-d"); err != nil {
+	// Migrate with a SINGLE migrator: bring up the api backend (its start.sh does
+	// NOT migrate) + its deps, migrate to completion, then start the rest.
+	// celery-beat's entrypoint also runs `migrate`, so starting everything at once
+	// races two migrators and fails with "column ... already exists" whenever
+	// migrations are pending. See migrate() below.
+	if err := e.dc("up", "-d", "db", "redis", "backend"); err != nil {
 		return err
 	}
 	e.logln("Applying database migrations...")
 	e.migrate()
+	if err := e.dc("up", "-d"); err != nil {
+		return err
+	}
 	e.createAdmin()
 	e.logln("")
 	e.logln("CARE is up → http://" + e.mdnsName() + ".local/   (login: admin / admin)")
@@ -36,10 +44,15 @@ func (e *Engine) RebuildBackend() error {
 	if err := e.buildBackend(); err != nil {
 		return err
 	}
-	if err := e.dc("up", "-d", "backend", "celery-worker", "celery-beat"); err != nil {
+	// Recreate + migrate the api backend BEFORE celery-beat (which also migrates),
+	// so the two don't race on the freshly-built code's new migrations.
+	if err := e.dc("up", "-d", "backend"); err != nil {
 		return err
 	}
 	e.migrate()
+	if err := e.dc("up", "-d", "celery-worker", "celery-beat"); err != nil {
+		return err
+	}
 	e.logln("Backend rebuilt and restarted.")
 	return nil
 }
@@ -74,8 +87,13 @@ func (e *Engine) BackupNow() error {
 	return nil
 }
 
-// migrate runs migrations, retrying until the backend/db are ready. The prebuilt
-// start.sh does NOT migrate, so we do (idempotent).
+// migrate runs migrations, retrying until the backend/db are ready.
+//
+// The api container's start.sh does NOT migrate, so we do (idempotent). But
+// celery-beat's entrypoint DOES run `migrate` on boot — so callers must run this
+// while celery-beat is stopped (bring up only db+redis+backend first), or the two
+// migrate processes race and fail with "column ... already exists" on any pending
+// migration. Start/RebuildBackend/Restore all order things that way.
 func (e *Engine) migrate() {
 	for n := 1; n <= 20; n++ {
 		if err := e.dc("exec", "-T", "backend", "python", "manage.py", "migrate", "--noinput"); err == nil {
